@@ -1,3 +1,20 @@
+# from tvcalib.cam_distr.tv_main_left import get_cam_distr, get_dist_distr
+from tvcalib.cam_distr.tv_main_center import get_cam_distr, get_dist_distr
+from tvcalib.utils.visualization_mpl import (
+    plot_loss_dataset,
+    plot_per_stadium_loss,
+    plot_per_step_loss,
+    plot_per_step_lr,
+)
+import tvcalib.utils.io as io
+from tvcalib.utils.objects_3d import (
+    SoccerPitchLineCircleSegments,
+    SoccerPitchSN,
+    SoccerPitchSNCircleCentralSplit,
+)
+from tvcalib.module import TVCalibModule
+from tvcalib.sncalib_dataset import FixedInputSizeDataset, custom_list_collate
+from tvcalib.cam_modules import SNProjectiveCamera
 import json
 from argparse import ArgumentParser
 from pathlib import Path
@@ -10,22 +27,6 @@ import pandas as pd
 from pytorch_lightning import seed_everything
 
 seed_everything(seed=10, workers=True)
-
-from tvcalib.cam_modules import SNProjectiveCamera
-from tvcalib.sncalib_dataset import FixedInputSizeDataset, custom_list_collate
-from tvcalib.module import TVCalibModule
-from tvcalib.utils.objects_3d import (
-    SoccerPitchLineCircleSegments,
-    SoccerPitchSN,
-    SoccerPitchSNCircleCentralSplit,
-)
-import tvcalib.utils.io as io
-from tvcalib.utils.visualization_mpl import (
-    plot_loss_dataset,
-    plot_per_stadium_loss,
-    plot_per_step_loss,
-    plot_per_step_lr,
-)
 
 
 args = ArgumentParser()
@@ -40,30 +41,29 @@ args = args.parse_args()
 with open(args.hparams) as fw:
     hparams = json.load(fw)
 
-init_cam_distr = hparams["dataset"]["filter_cam_type"]
+# init_cam_distr = hparams["dataset"]["filter_cam_type"]
 # TODO generic import
-if args.overwrite_init_cam_distr is not None:
-    init_cam_distr = args.overwrite_init_cam_distr
-if init_cam_distr == "Main camera left":
-    from tvcalib.cam_distr.tv_main_left import get_cam_distr, get_dist_distr
-elif init_cam_distr == "Main camera right":
-    from tvcalib.cam_distr.tv_main_right import get_cam_distr, get_dist_distr
-elif init_cam_distr == "Main behind the goal":
-    from tvcalib.cam_distr.tv_main_behind import get_cam_distr, get_dist_distr
-elif init_cam_distr == "Main camera center":
-    from tvcalib.cam_distr.tv_main_center import get_cam_distr, get_dist_distr
-elif init_cam_distr == "Main tribune":
-    from tvcalib.cam_distr.tv_main_tribune import get_cam_distr, get_dist_distr
+# if args.overwrite_init_cam_distr is not None:
+#     init_cam_distr = args.overwrite_init_cam_distr
+# if init_cam_distr == "Main camera left":
+# elif init_cam_distr == "Main camera right":
+#     from tvcalib.cam_distr.tv_main_right import get_cam_distr, get_dist_distr
+# elif init_cam_distr == "Main behind the goal":
+#     from tvcalib.cam_distr.tv_main_behind import get_cam_distr, get_dist_distr
+# elif init_cam_distr == "Main camera center":
+#     from tvcalib.cam_distr.tv_main_center import get_cam_distr, get_dist_distr
+# elif init_cam_distr == "Main tribune":
+#     from tvcalib.cam_distr.tv_main_tribune import get_cam_distr, get_dist_distr
 
-    hparams["dataset"]["filter_cam_type"] = False
-else:
-    from tvcalib.cam_distr.tv_main_center import get_cam_distr, get_dist_distr
+hparams["dataset"]["filter_cam_type"] = False
 
 
 distr_lens_disto = None
-distr_cam = get_cam_distr(hparams["sigma_scale"], hparams["batch_dim"], hparams["temporal_dim"])
+distr_cam = get_cam_distr(
+    hparams["sigma_scale"], hparams["batch_dim"], hparams["temporal_dim"])
 if hparams["lens_distortion"] == True:
-    distr_lens_disto = get_dist_distr(hparams["batch_dim"], hparams["temporal_dim"])
+    distr_lens_disto = get_dist_distr(
+        hparams["batch_dim"], hparams["temporal_dim"])
 hparams["distr_cam"] = distr_cam
 hparams["distr_lens_disto"] = distr_lens_disto
 
@@ -81,10 +81,12 @@ if (
     base_field = SoccerPitchSNCircleCentralSplit()
 else:
     base_field = SoccerPitchSN()
-object3d = SoccerPitchLineCircleSegments(device=args.device, base_field=base_field)
+object3d = SoccerPitchLineCircleSegments(
+    device=args.device, base_field=base_field)
 print(base_field.__class__, object3d.__class__)
 
 print("Init Dataset")
+
 dataset = FixedInputSizeDataset(
     model3d=object3d,
     image_width=hparams["image_width"],
@@ -92,7 +94,7 @@ dataset = FixedInputSizeDataset(
     constant_cam_position=hparams["temporal_dim"],
     **hparams["dataset"],
 )
-print(dataset.df_match_info.head(5))
+# print(dataset.df_match_info.head(5))
 dataloader = torch.utils.data.DataLoader(
     dataset,
     batch_size=hparams["batch_dim"],
@@ -116,13 +118,15 @@ hparams["TVCalibModule"] = model.hparams
 print(output_dir / "hparams.yml")
 io.write_yaml(hparams, output_dir / "hparams.yml")
 
+
 dataset_dict_stacked = {}
 dataset_dict_stacked["batch_idx"] = []
 for batch_idx, x_dict in enumerate(dataloader):
-
     print(f"{batch_idx}/{len(dataloader)-1}")
-    points_line = x_dict["lines__px_projected_selection_shuffled"].clone().detach()
-    points_circle = x_dict["circles__px_projected_selection_shuffled"].clone().detach()
+    points_line = x_dict["lines__px_projected_selection_shuffled"].clone(
+    ).detach()
+    points_circle = x_dict["circles__px_projected_selection_shuffled"].clone(
+    ).detach()
     batch_size = points_line.shape[0]
 
     fout_prefix = f"batch_{batch_idx}"
@@ -137,15 +141,19 @@ for batch_idx, x_dict in enumerate(dataloader):
         **per_sample_loss,
         "meta": x_dict["meta"],
     }
+    print(x_dict["image_id"])
     if args.log_per_step:
-        output_dict["per_step_lr"] = per_step_info["lr"].squeeze(-1)  # (optim_steps,)
-        output_dict["per_step_loss"] = per_step_info["loss"]  # (B, T, optim_steps)
+        # (optim_steps,)
+        output_dict["per_step_lr"] = per_step_info["lr"].squeeze(-1)
+        # (B, T, optim_steps)
+        output_dict["per_step_loss"] = per_step_info["loss"]
 
     print(output_dir / f"{fout_prefix}.pt")
     torch.save(io.detach_dict(output_dict), output_dir / f"{fout_prefix}.pt")
 
     if args.log_per_step:
-        _ = plot_per_step_loss(per_step_info["loss"].cpu(), output_dict["image_ids"])
+        _ = plot_per_step_loss(
+            per_step_info["loss"].cpu(), output_dict["image_ids"])
         print(output_dir / f"{fout_prefix}_loss.pdf")
         plt.savefig(output_dir / f"{fout_prefix}_loss.pdf")
         _ = plot_per_step_lr(per_step_info["lr"].cpu())
@@ -158,10 +166,12 @@ for batch_idx, x_dict in enumerate(dataloader):
         del output_dict["per_step_lr"]
     # max distance over all given points
     output_dict["loss_ndc_lines_distances_max"] = (
-        output_dict["loss_ndc_lines_distances_raw"].amax(dim=[-2, -1]).squeeze(-1)
+        output_dict["loss_ndc_lines_distances_raw"].amax(
+            dim=[-2, -1]).squeeze(-1)
     )
     output_dict["loss_ndc_circles_distances_max"] = (
-        output_dict["loss_ndc_circles_distances_raw"].amax(dim=[-2, -1]).squeeze(-1)
+        output_dict["loss_ndc_circles_distances_raw"].amax(
+            dim=[-2, -1]).squeeze(-1)
     )
     output_dict["loss_ndc_total_max"] = torch.stack(
         [
@@ -181,6 +191,27 @@ for batch_idx, x_dict in enumerate(dataloader):
         del output_dict["meta"]["camera"]
     output_dict.update(output_dict["meta"])
     output_dict.update(output_dict["camera"])
+
+    for i, image_id in enumerate(x_dict["image_id"]):
+        per_sample_dict = {}
+        for k in output_dict.keys():
+            print(k)
+            if k == "camera":
+                camera_dict = {}
+                for kk in output_dict["camera"].keys():
+                    camera_dict[kk] = output_dict["camera"][kk][i][0]
+#            print(k, output_dict["camera"])
+                per_sample_dict[k] = camera_dict
+            elif k == "meta":
+                continue
+            else:
+                per_sample_dict[k] = output_dict[k][i]
+
+        json_path = output_dir / "per_image" / (image_id + ".json")
+        json_path.parent.mkdir(exist_ok=True)
+        with open(json_path, 'w') as f:
+            json.dump(per_sample_dict, f, indent=2)
+
     del output_dict["meta"]
     del output_dict["camera"]
 
@@ -192,16 +223,19 @@ for batch_idx, x_dict in enumerate(dataloader):
         else:
             dataset_dict_stacked[k] = output_dict[k]
 
+
 df = pd.DataFrame.from_dict(dataset_dict_stacked)
 print(df)
-explode_cols = [k for k, v in dataset_dict_stacked.items() if isinstance(v, list)]
+explode_cols = [k for k, v in dataset_dict_stacked.items()
+                if isinstance(v, list)]
 df = df.explode(column=explode_cols)  # explode over t
 df["image_id"] = df["image_ids"].apply(lambda l: l.split(".jpg")[0])
 df.set_index("image_id", inplace=True)
 
 if "match" in df.columns:
     df["stadium"] = df["match"].apply(lambda s: s.split(" - ")[0].strip())
-    number_of_images_per_stadium = df.groupby("stadium")["stadium"].agg(len).to_dict()
+    number_of_images_per_stadium = df.groupby(
+        "stadium")["stadium"].agg(len).to_dict()
     df["stadium (number of images)"] = df["stadium"].apply(
         lambda stadium: f"{stadium} ({number_of_images_per_stadium[stadium]})"
     )

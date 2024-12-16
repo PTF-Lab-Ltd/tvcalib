@@ -4,9 +4,8 @@
     "sigma_scale": 1.96,
     "object3d": "SoccerPitchLineCircleSegments",
     "dataset": {
-        "file_match_info": "data/datasets/sncalib-test/match_info_cam_gt.json",
-        "filter_cam_type": "Main camera center",
-        "extremities_annotations": "data/segment_localization/np4_nc8_r4_md30/sncalib-test",
+        "images_dir": "/home/data/soccernet_processed/01_frames/england_epl-2014-2015-2015-02-21 - 18-00 Chelsea 1 - 1 Burnley_0001",
+        "extremities_annotations": "data/segment_localization/np4_nc8_r4_md30",
         "extremities_prefix": "extremities_",
         "num_points_on_line_segments": 4,
         "num_points_on_circle_segments": 8,

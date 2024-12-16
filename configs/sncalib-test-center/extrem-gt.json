@@ -4,9 +4,9 @@
     "sigma_scale": 1.96,
     "object3d": "SoccerPitchLineCircleSegments",
     "dataset": {
-        "file_match_info": "data/datasets/sncalib-test/match_info_cam_gt.json",
+        "file_match_info": "/home/anna/tvcalib/data/datasets/sncalib-test/match_info.json",
         "filter_cam_type": "Main camera center",
-        "extremities_annotations": "data/datasets/sncalib-test",
+        "extremities_annotations": "/home/anna/tvcalib/data/datasets/sncalib-test/frames",
         "extremities_prefix": "",
         "num_points_on_line_segments": 4,
         "num_points_on_circle_segments": 8,
