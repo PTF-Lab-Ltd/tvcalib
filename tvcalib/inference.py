@@ -94,6 +94,46 @@ class InferenceSegmentationModel:
         return self.model(img_batch)["out"].argmax(1)
 
 
+# class CustomNetwork:
+
+#     def __init__(self, checkpoint):
+#         print("Loading model" + checkpoint)
+#         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+#         self.model = deeplabv3_resnet101(num_classes=len(
+#             SoccerPitch.lines_classes) + 1, aux_loss=True)
+#         self.model.load_state_dict(torch.load(checkpoint)[
+#                                    "model"], strict=False)
+#         self.model.to(self.device)
+#         self.model.eval()
+#         print("using", self.device)
+
+#     def forward(self, img):
+#         trf = T.Compose(
+#             [
+#                 T.Resize(256),
+#                 # T.CenterCrop(224),
+#                 T.ToTensor(),
+#                 T.Normalize(
+#                     mean=[0.485, 0.456, 0.406],
+#                     std=[0.229, 0.224, 0.225]
+#                 )
+#             ]
+#         )
+#         img = trf(img).unsqueeze(0).to(self.device)
+#         output = self.model(img)["out"].detach().squeeze(0)
+#         mask = output.argmax(0)
+
+#         probabilities = F.softmax(output, dim=0)
+#         confidence = torch.zeros_like(mask, dtype=torch.float32)
+#         for i in range(probabilities.shape[0]):  # для каждого класса
+#             confidence = torch.where(mask == i, probabilities[i], confidence)
+
+#         mask = mask.cpu().numpy().astype(np.uint8)
+#         confidence = ((confidence.cpu().numpy() ** 2) * 255).astype(np.uint8)
+#         return mask, confidence
+
+
+
 class InferenceDatasetSegmentation(torch.utils.data.Dataset):
     def __init__(
         self,
