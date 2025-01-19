@@ -10,10 +10,10 @@ import kornia
 from PIL import Image
 from torch.utils.data import Dataset
 import torchvision
-from torch._six import string_classes
 import collections
 from operator import itemgetter
 
+string_classes = (str, bytes)
 
 def split_circle_central(keypoints_dict):
     # split "circle central" in  "circle central left" and "circle central right"
