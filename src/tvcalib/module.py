@@ -1,6 +1,7 @@
 from functools import partial
 from typing import Tuple
-
+import time
+from functools import wraps
 import torch
 from tqdm.auto import tqdm
 from kornia.geometry.conversions import convert_points_to_homogeneous
@@ -8,6 +9,17 @@ from kornia.geometry.conversions import convert_points_to_homogeneous
 
 from tvcalib.cam_modules import CameraParameterWLensDistDictZScore, SNProjectiveCamera
 from tvcalib.utils.linalg import distance_line_pointcloud_3d, distance_point_pointcloud
+
+
+def timing_decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__}: {end - start:.4f} seconds")
+        return result
+    return wrapper
 
 
 class TVCalibModule(torch.nn.Module):
@@ -30,6 +42,14 @@ class TVCalibModule(torch.nn.Module):
         self.model3d = model3d
         self.cam_param_dict = CameraParameterWLensDistDictZScore(
             cam_distr, dist_distr, device=device
+        )
+        phi_hat, psi_hat = self._get_camera_params()
+        self.cam = SNProjectiveCamera(
+            phi_hat, psi_hat,
+            self.principal_point,
+            self.image_width, self.image_height,
+            device=device,
+            nan_check=False,
         )
 
         self.lens_distortion_active = False if dist_distr is None else True
@@ -66,20 +86,54 @@ class TVCalibModule(torch.nn.Module):
             self.optim), "scheduler": str(self.Scheduler)}
         self.log_per_step = log_per_step
 
+        self.current_step = 0
+        self.max_steps = optim_steps
+
+        self.points_buffer = None
+        self.reshape_buffer = None
+
+    def reset_scheduler(self):
+        self.current_step = 0
+        self.scheduler = self.Scheduler(self.optim)
+        if self.lens_distortion_active:
+            self.scheduler_lens_distortion = self.Scheduler_lens_distortion()
+
+
+    # @timing_decorator
+    def _get_camera_params(self):
+        return self.cam_param_dict()
+
+    # @timing_decorator
+    def _update_camera(self, phi_hat, psi_hat):
+        self.cam.update_params(phi_hat, psi_hat)
+
+        # return SNProjectiveCamera(
+        #     phi_hat, psi_hat,
+        #     self.principal_point,
+        #     self.image_width, self.image_height,
+        #     device=self._device,
+        #     nan_check=False,
+        # )
+
+    # @timing_decorator
     def forward(self, x):
 
         # individual camera parameters & distortion parameters
-        phi_hat, psi_hat = self.cam_param_dict()
+        phi_hat, psi_hat = self._get_camera_params() # self.cam_param_dict()
 
-        cam = SNProjectiveCamera(
-            phi_hat,
-            psi_hat,
-            self.principal_point,
-            self.image_width,
-            self.image_height,
-            device=self._device,
-            nan_check=False,
-        )
+        # cam = SNProjectiveCamera(
+        #     phi_hat,
+        #     psi_hat,
+        #     self.principal_point,
+        #     self.image_width,
+        #     self.image_height,
+        #     device=self._device,
+        #     nan_check=False,
+        # )
+
+        # Initialize camera
+        self._update_camera(phi_hat, psi_hat)
+
 
         # (batch_size, num_views_per_cam, 3, num_segments, num_points)
         points_px_lines_true = x["lines__ndc_projected_selection_shuffled"].to(
@@ -99,11 +153,11 @@ class TVCalibModule(torch.nn.Module):
         points3d_lines_keypoints = points3d_lines_keypoints.reshape(
             3, S_l * 2).transpose(0, 1)
         points_px_lines_keypoints = convert_points_to_homogeneous(
-            cam.project_point2ndc(
+            self.cam.project_point2ndc(
                 points3d_lines_keypoints, lens_distortion=False)
         )  # (batch_size, t_l, S_l*2, 3)
 
-        if batch_size < cam.batch_dim:  # actual batch_size smaller than expected, i.e. last batch
+        if batch_size < self.cam.batch_dim:  # actual batch_size smaller than expected, i.e. last batch
             points_px_lines_keypoints = points_px_lines_keypoints[:batch_size]
 
         points_px_lines_keypoints = points_px_lines_keypoints.view(
@@ -124,8 +178,8 @@ class TVCalibModule(torch.nn.Module):
             # undistort given points
             pc = pc.view(batch_size, T_l, S_l * N_l, 3)
             pc = pc.detach().clone()
-            pc[..., :2] = cam.undistort_points(
-                pc[..., :2], cam.intrinsics_ndc, num_iters=1
+            pc[..., :2] = self.cam.undistort_points(
+                pc[..., :2], self.cam.intrinsics_ndc, num_iters=1
             )  # num_iters=1 might be enough for a good approximation
             pc = pc.view(batch_size, T_l, S_l, N_l, 3)
 
@@ -141,10 +195,10 @@ class TVCalibModule(torch.nn.Module):
         _, S_c, N_c_star = points3d_circles_pc.shape
         points3d_circles_pc = points3d_circles_pc.reshape(
             3, S_c * N_c_star).transpose(0, 1)
-        points_px_circles_pc = cam.project_point2ndc(
+        points_px_circles_pc = self.cam.project_point2ndc(
             points3d_circles_pc, lens_distortion=False)
 
-        if batch_size < cam.batch_dim:  # actual batch_size smaller than expected, i.e. last batch
+        if batch_size < self.cam.batch_dim:  # actual batch_size smaller than expected, i.e. last batch
             points_px_circles_pc = points_px_circles_pc[:batch_size]
 
         if self.lens_distortion_active:
@@ -153,9 +207,9 @@ class TVCalibModule(torch.nn.Module):
                 batch_size, T_c, 3, S_c * N_c
             ).transpose(2, 3)
             points_px_circles_true = points_px_circles_true.detach().clone()
-            points_px_circles_true[..., :2] = cam.undistort_points(
+            points_px_circles_true[..., :2] = self.cam.undistort_points(
                 points_px_circles_true[...,
-                                       :2], cam.intrinsics_ndc, num_iters=1
+                                       :2], self.cam.intrinsics_ndc, num_iters=1
             )
             points_px_circles_true = points_px_circles_true.transpose(2, 3).view(
                 batch_size, T_c, 3, S_c, N_c
@@ -172,14 +226,21 @@ class TVCalibModule(torch.nn.Module):
             # (batch_size, T_c, 1, S_c, N_c)
             "loss_ndc_circles": distances_px_circles_raw,
         }
-        return distances_dict, cam
+        return distances_dict, self.cam
 
     def self_optim_batch(self, x, *args, **kwargs):
 
         # re-initialize lr scheduler for every batch
-        scheduler = self.Scheduler(self.optim)
-        if self.lens_distortion_active:
-            scheduler_lens_distortion = self.Scheduler_lens_distortion()
+        if self.current_step >= self.max_steps:
+            self.reset_scheduler()
+
+        if not hasattr(self, 'scheduler'):
+            self.reset_scheduler()
+
+            # self.scheduler = self.Scheduler(self.optim)
+            # if self.lens_distortion_active:
+            #     self.scheduler_lens_distortion = self.Scheduler_lens_distortion()
+
 
         initial_cam_dict = kwargs.pop('initial_cam_dict', None)
         initial_dist_dict = kwargs.pop('initial_dist_dict', None)
@@ -255,7 +316,7 @@ class TVCalibModule(torch.nn.Module):
                 loss_total = loss_total_dist
 
                 if self.log_per_step:
-                    per_step_info["lr"].append(scheduler.get_last_lr())
+                    per_step_info["lr"].append(self.scheduler.get_last_lr())
                     per_step_info["loss"].append(
                         distances_reduced)  # log per sample loss
                 if step % 50 == 0:
@@ -265,12 +326,17 @@ class TVCalibModule(torch.nn.Module):
                         loss_circles=f'{losses["loss_ndc_circles"].detach().cpu().tolist():.3f}',
                     )
 
-                loss_total.backward()
+                loss_total.backward(retain_graph=True)
                 self.optim.step()
-                scheduler.step()
+
+                # Safe scheduler step
+                if self.current_step < self.max_steps:
+                    self.scheduler.step()
+                    self.current_step += 1
+
                 if self.lens_distortion_active:
                     self.optim_lens_distortion.step()
-                    scheduler_lens_distortion.step()
+                    self.scheduler_lens_distortion.step()
 
         per_sample_loss["loss_ndc_total"] = torch.sum(
             torch.stack([per_sample_loss[key_dist]

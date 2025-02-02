@@ -210,7 +210,43 @@ class SNProjectiveCamera:
 
         self.nan_check = nan_check
         super().__init__()
+    #     self._setup_cached_tensors()
 
+    # def _setup_cached_tensors(self):
+    #     self.eye_3x3 = torch.eye(3, requires_grad=False, device=self.device)
+    #     self.position_reshaped = self.position.view(
+    #         self.pseudo_batch_size, 1, 3)
+
+
+    def update_params(self, phi_dict, psi):
+        """Update camera parameters"""
+        # Flatten dictionary
+        phi_dict_flat = {}
+        for k, v in phi_dict.items():
+            if len(v.shape) == 2:
+                phi_dict_flat[k] = v.view(v.shape[0] * v.shape[1])
+            elif len(v.shape) == 3:
+                phi_dict_flat[k] = v.view(v.shape[0] * v.shape[1], v.shape[-1])
+                
+        self.phi_dict_flat = phi_dict_flat
+        self.phi_dict = phi_dict
+        
+        # Update all camera parameters
+        self.intrinsics_ndc = self.construct_intrinsics_ndc()
+        self.intrinsics_raster = self.construct_intrinsics_raster()
+        
+        self.rotation = self.rotation_from_euler_angles(
+            *[phi_dict_flat[k] for k in ["pan", "tilt", "roll"]]
+        )
+        self.position = torch.stack([phi_dict_flat[k] for k in ["c_x", "c_y", "c_z"]], dim=-1)
+        self.position = self.position.repeat_interleave(
+            int(self.pseudo_batch_size / self.batch_dim), dim=0
+        )
+        
+        # Update projection matrices
+        self.P_ndc = self.construct_projection_matrix(self.intrinsics_ndc)
+        self.P_raster = self.construct_projection_matrix(self.intrinsics_raster)
+    
     def construct_projection_matrix(self, intrinsics):
         It = torch.eye(4, device=self.device)[:-1].repeat(self.pseudo_batch_size, 1, 1)
         It[:, :, -1] = -self.position  # (B, 3, 4)
