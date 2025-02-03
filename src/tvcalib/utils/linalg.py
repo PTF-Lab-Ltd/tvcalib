@@ -77,30 +77,28 @@ def distance_line_pointcloud_3d(
 
 
 def distance_point_pointcloud(points: torch.Tensor, pointcloud: torch.Tensor) -> torch.Tensor:
-    """Batched version for point-pointcloud distance calculation
-    Args:
-        points (torch.Tensor): N points in homogenous coordinates; shape (B, T, 3, S, N)
-        pointcloud (torch.Tensor): N_star points for each pointcloud; shape (B, T, S, N_star, 2)
-
-    Returns:
-        torch.Tensor: Minimum distance for each point N to pointcloud; shape (B, T, 1, S, N)
-    """
-
+    """Batched version for point-pointcloud distance calculation"""
     batch_size, T, _, S, N = points.shape
-    batch_size, T, S, N_star, _ = pointcloud.shape
+    total_points = batch_size * T * S * N
 
-    pointcloud = pointcloud.reshape(batch_size * T * S, N_star, 2)
+    # # Debug shapes
+    # print(f"Points shape: {points.shape}")
+    # print(f"Expected reshape size: {total_points}")
 
-    points = convert_points_from_homogeneous(
-        points.permute(0, 1, 3, 4, 2).reshape(batch_size * T * S, N, 3)
-    )
+    # Move dimensions before normalization
+    points = points.permute(0, 1, 3, 4, 2)  # Now [1,1,4,8,3]
 
-    # cdist signature: (B, P, M), (B, R, M) -> (B, P, R)
-    distances = torch.cdist(points, pointcloud, p=2)  # (B*T*S, N, N_star)
-
-    distances = distances.view(batch_size, T, S, N, N_star)
-    distances = distances.unsqueeze(-4)
-
-    # distance to nearest point from point cloud (batch_size, T, 1, S, N, N_star)
-    distances = distances.min(dim=-1)[0]
-    return distances
+    points[..., :2].div_(points[..., 2:3])
+    points_xy = points[..., :2]
+    
+    # Use broadcasting for distance calculation
+    # points_xy: [1,1,4,8,2]
+    # pointcloud: [1,1,4,N_star,2]
+    diff = points_xy.unsqueeze(-2) - pointcloud.unsqueeze(-3)
+    distances = torch.sum(diff * diff, dim=-1)
+    
+    min_distances = distances.min(dim=-1)[0]  # [1,1,4,8]
+    # print(f"Min distances shape: {min_distances.shape}")
+    res = min_distances.unsqueeze(2)  # [1,1,1,4]
+    # print(res.shape)
+    return res

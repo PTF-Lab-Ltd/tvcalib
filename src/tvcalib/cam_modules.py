@@ -6,7 +6,7 @@ import kornia
 
 from tvcalib.utils.data_distr import FeatureScalerZScore
 
-
+from time import perf_counter
 class CameraParameterWLensDistDictZScore(LightningModule):
     """Holds individual camera parameters including lens distortion parameters as nn.Modul"""
 
@@ -210,42 +210,6 @@ class SNProjectiveCamera:
 
         self.nan_check = nan_check
         super().__init__()
-    #     self._setup_cached_tensors()
-
-    # def _setup_cached_tensors(self):
-    #     self.eye_3x3 = torch.eye(3, requires_grad=False, device=self.device)
-    #     self.position_reshaped = self.position.view(
-    #         self.pseudo_batch_size, 1, 3)
-
-
-    def update_params(self, phi_dict, psi):
-        """Update camera parameters"""
-        # Flatten dictionary
-        phi_dict_flat = {}
-        for k, v in phi_dict.items():
-            if len(v.shape) == 2:
-                phi_dict_flat[k] = v.view(v.shape[0] * v.shape[1])
-            elif len(v.shape) == 3:
-                phi_dict_flat[k] = v.view(v.shape[0] * v.shape[1], v.shape[-1])
-                
-        self.phi_dict_flat = phi_dict_flat
-        self.phi_dict = phi_dict
-        
-        # Update all camera parameters
-        self.intrinsics_ndc = self.construct_intrinsics_ndc()
-        self.intrinsics_raster = self.construct_intrinsics_raster()
-        
-        self.rotation = self.rotation_from_euler_angles(
-            *[phi_dict_flat[k] for k in ["pan", "tilt", "roll"]]
-        )
-        self.position = torch.stack([phi_dict_flat[k] for k in ["c_x", "c_y", "c_z"]], dim=-1)
-        self.position = self.position.repeat_interleave(
-            int(self.pseudo_batch_size / self.batch_dim), dim=0
-        )
-        
-        # Update projection matrices
-        self.P_ndc = self.construct_projection_matrix(self.intrinsics_ndc)
-        self.P_raster = self.construct_projection_matrix(self.intrinsics_raster)
     
     def construct_projection_matrix(self, intrinsics):
         It = torch.eye(4, device=self.device)[:-1].repeat(self.pseudo_batch_size, 1, 1)
@@ -304,15 +268,18 @@ class SNProjectiveCamera:
         """
         position = self.position.view(self.pseudo_batch_size, 1, 3)
         point = points3d - position
-        rotated_point = self.rotation @ point.transpose(1, 2)  # (pseudo_batch_size, 3, N)
+        rotated_point = torch.bmm(self.rotation, point.transpose(1, 2))  # (pseudo_batch_size, 3, N)
         dist_point2cam = rotated_point[:, 2]  # (B, N) distance pixel to world point
         dist_point2cam = dist_point2cam.view(self.pseudo_batch_size, 1, rotated_point.shape[-1])
         rotated_point = rotated_point / dist_point2cam  # (B, 3, N) / (B, 1, N) -> (B, 3, N)
-
-        projected_points = self.intrinsics_raster @ rotated_point  # (B, 3, N)
+        projected_points = torch.bmm(self.intrinsics_raster, rotated_point)  # (B, 3, N)
         # transpose vs view? here
         projected_points = projected_points.transpose(-1, -2)  # cannot use view()
-        projected_points = kornia.geometry.convert_points_from_homogeneous(projected_points)
+        projected_points = projected_points[...,
+                                            :2] / projected_points[..., 2:3]
+
+
+# kornia.geometry.convert_points_from_homogeneous(projected_points)
         if lens_distortion:
             if self.psi is None:
                 raise RuntimeError("Lens distortion requested, but deactivated in module")
@@ -338,33 +305,18 @@ class SNProjectiveCamera:
         Returns:
             torch.tensor: projected points of shape (B, T, N, 2)
         """
-        position = self.position.view(self.pseudo_batch_size, 1, 3)
-        point = points3d - position
-        rotated_point = self.rotation @ point.transpose(1, 2)  # (pseudo_batch_size, 3, N)
-        dist_point2cam = rotated_point[:, 2]  # (B, N) distance pixel to world point
-        dist_point2cam = dist_point2cam.view(self.pseudo_batch_size, 1, rotated_point.shape[-1])
-        rotated_point = rotated_point / dist_point2cam  # (B, 3, N) / (B, 1, N) -> (B, 3, N)
+        point = points3d - self.position.view(self.pseudo_batch_size, 1, 3)
+        
+        rotated_point = torch.bmm(
+            self.rotation, point.transpose(1, 2))
+        rotated_point.div_(rotated_point[:, 2].unsqueeze(1).clone())
 
-        projected_points = self.intrinsics_ndc @ rotated_point  # (B, 3, N)
-        # transpose vs view? here
+        projected_points = torch.bmm(self.intrinsics_ndc, rotated_point)  # (B, 3, N)
         projected_points = projected_points.transpose(-1, -2)  # cannot use view()
-        projected_points = kornia.geometry.convert_points_from_homogeneous(projected_points)
-        if self.nan_check:
-            if torch.isnan(projected_points).any().item():
-                print(projected_points)
-                print(self.phi_dict_flat)
-                print("lens distortion", self.lens_dist_coeff)
+        projected_points = projected_points[...,
+                                            :2] / projected_points[..., 2:3]
 
-                raise RuntimeWarning("NaN in project_point2ndc before distort")
-        if lens_distortion:
-            if self.psi is None:
-                raise RuntimeError("Lens distortion requested, but deactivated in module")
-            projected_points = self.distort_points(projected_points, self.intrinsics_ndc)
-
-        # reshape back from (pseudo_batch_size, N, 2) to (B, T, N, 2)
-        projected_points = projected_points.view(
-            self.batch_dim, self.temporal_dim, projected_points.shape[-2], 2
-        )
+  
         if self.nan_check:
             if torch.isnan(projected_points).any().item():
                 print(self.phi_dict_flat)
@@ -384,7 +336,7 @@ class SNProjectiveCamera:
             torch.tensor: projected points of shape (B, T, N, 2)
         """
 
-        points3d = kornia.geometry.conversions.convert_points_to_homogeneous(points3d).transpose(
+        points3d = convert_points_to_homogeneous_fast(points3d).transpose(
             1, 2
         )  # (B, 4, N)
         projected_points = torch.bmm(self.P_raster, points3d.repeat(self.pseudo_batch_size, 1, 1))
@@ -393,7 +345,9 @@ class SNProjectiveCamera:
         )
         projected_points /= normalize_by
         projected_points = projected_points.transpose(-1, -2)  # cannot use view()
-        projected_points = kornia.geometry.convert_points_from_homogeneous(projected_points)
+        projected_points = projected_points[...,
+                                            :2] / projected_points[..., 2:3]
+# kornia.geometry.convert_points_from_homogeneous(projected_points)
         if lens_distortion:
             if self.psi is None:
                 raise RuntimeError("Lens distortion requested, but deactivated in module")
@@ -416,7 +370,7 @@ class SNProjectiveCamera:
             torch.tensor: projected points of shape (B, T, N, 2)
         """
 
-        points3d = kornia.geometry.conversions.convert_points_to_homogeneous(points3d).transpose(
+        points3d = convert_points_to_homogeneous_fast(points3d).transpose(
             1, 2
         )  # (B, 4, N)
         projected_points = torch.bmm(self.P_ndc, points3d.repeat(self.pseudo_batch_size, 1, 1))
@@ -425,7 +379,11 @@ class SNProjectiveCamera:
         )
         projected_points /= normalize_by
         projected_points = projected_points.transpose(-1, -2)  # cannot use view()
-        projected_points = kornia.geometry.convert_points_from_homogeneous(projected_points)
+        projected_points = projected_points[...,
+                                            :2] / projected_points[..., 2:3]
+
+
+# kornia.geometry.convert_points_from_homogeneous(projected_points)
         if lens_distortion:
             if self.psi is None:
                 raise RuntimeError("Lens distortion requested, but deactivated in module")
@@ -493,10 +451,14 @@ class SNProjectiveCamera:
     @staticmethod
     def get_aov_rad(d: float, fl: torch.tensor):
         # https://en.wikipedia.org/wiki/Angle_of_view#Calculating_a_camera's_angle_of_view
+        fl = fl.to(torch.float16)
+        d = torch.tensor(d, dtype=torch.float16)
         return 2 * torch.arctan(d / (2 * fl))  # in range [0.0, PI]
 
     @staticmethod
     def get_fl_from_aov_rad(aov_rad: torch.tensor, d: float):
+        aov_rad = aov_rad.to(torch.float16)
+        d = torch.tensor(d, dtype=torch.float16)
         return 0.5 * d * (1 / torch.tan(0.5 * aov_rad))
 
     def undistort_points(self, points_pixel: torch.tensor, intrinsics, num_iters=5) -> torch.tensor:
@@ -617,3 +579,10 @@ class SNProjectiveCamera:
         # (T, S*N, 3) -> (T, 3, S*N) -> (B, T, 3, S, N)
         points = points.transpose(2, 3).view(batch_size, T, 3, S, N)
         return points
+
+
+def convert_points_to_homogeneous_fast(points: torch.Tensor) -> torch.Tensor:
+    """Fast homogeneous coordinate conversion"""
+    # Add ones directly
+    ones = torch.ones_like(points[..., :1])
+    return torch.cat([points, ones], dim=-1)
