@@ -138,7 +138,7 @@ class SoccerPitchSN:
             [-pitch_length / 2.0, pitch_width / 2.0, 0], dtype="float"
         )
         self.top_right_corner = np.array([pitch_length / 2.0, -pitch_width / 2.0, 0], dtype="float")
-        self.top_left_corner = np.array([-pitch_length / 2.0, -34, 0], dtype="float")
+        self.top_left_corner = np.array([-pitch_length / 2.0, -pitch_width / 2.0, 0], dtype="float")
 
         self.left_goal_bottom_left_post = np.array(
             [-pitch_length / 2.0, SoccerPitchSN.GOAL_LENGTH / 2.0, 0.0], dtype="float"
