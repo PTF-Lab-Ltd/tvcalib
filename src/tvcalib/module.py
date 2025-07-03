@@ -162,7 +162,7 @@ class TVCalibModule(torch.nn.Module):
         return distances_dict, cam
 
     def self_optim_batch(self, x, log_dir: Optional[Path] = None, frame_ids: Optional[List[str]] = None, *args, **kwargs):
-
+        print(f"DEBUG: log_dir={log_dir}, frame_ids={frame_ids}")
         scheduler = self.Scheduler(self.optim)  # re-initialize lr scheduler for every batch
         if self.lens_distortion_active:
             scheduler_lens_distortion = self.Scheduler_lens_distortion()
@@ -194,6 +194,7 @@ class TVCalibModule(torch.nn.Module):
         if log_dir is not None and frame_ids is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
             loss_buffers = [[] for _ in frame_ids]
+            print(f"DEBUG: loss_buffers initialized")
         else:
             loss_buffers = []
 
@@ -252,6 +253,8 @@ class TVCalibModule(torch.nn.Module):
                         if i < len(per_sample_total_loss):
                             loss_value = per_sample_total_loss[i].detach().cpu().item()
                             loss_buffers[i].append((step, loss_value))
+                            # if step % 500 == 0:  # Log every 500 steps
+                                # print(f"DEBUG: Buffered loss for frame {frame_id} at step {step}: {loss_value}")
 
                 if self.log_per_step:
                     per_step_info["lr"].append(scheduler.get_last_lr())
@@ -277,15 +280,36 @@ class TVCalibModule(torch.nn.Module):
 
         # Write loss data to CSV file if logging is enabled
         if log_dir is not None and frame_ids is not None and any(loss_buffers):
+            print(f"DEBUG: About to write {len(frame_ids)} CSV files to {log_dir}")
+            print(f"DEBUG: log_dir exists: {log_dir.exists()}")
+            print(f"DEBUG: loss_buffers lengths: {[len(buf) for buf in loss_buffers]}")
             # Write all buffered data at once
             for i, frame_id in enumerate(frame_ids):
+                print(f"DEBUG: Writing CSV file for frame {frame_id} with {len(loss_buffers[i])} loss values")
+                if len(loss_buffers[i]) > 0:
+                    print(f"DEBUG: First few loss values: {loss_buffers[i][:3]}")
                 csv_path = log_dir / f"{frame_id}_loss.csv"
-                with open(csv_path, 'w', newline='') as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(['step', 'loss'])
-                    writer.writerows(loss_buffers[i])
+                print(f"DEBUG: CSV path: {csv_path}")
+                try:
+                    with open(csv_path, 'w', newline='') as csvfile:
+                        writer = csv.writer(csvfile)
+                        writer.writerow(['step', 'loss'])
+                        writer.writerows(loss_buffers[i])
+                    print(f"DEBUG: Successfully wrote {csv_path}")
+                    # Check if file was actually created and has content
+                    if csv_path.exists():
+                        with open(csv_path, 'r') as f:
+                            content = f.read()
+                            print(f"DEBUG: File {csv_path} exists, content length: {len(content)}")
+                            print(f"DEBUG: First few lines: {content[:200]}")
+                    else:
+                        print(f"DEBUG: File {csv_path} was NOT created!")
+                except Exception as e:
+                    print(f"DEBUG: Error writing {csv_path}: {e}")
         else:
             print(f"DEBUG: Not writing CSV files. log_dir={log_dir}, frame_ids={frame_ids}, any(loss_buffers)={any(loss_buffers) if loss_buffers else False}")
+            if loss_buffers:
+                print(f"DEBUG: loss_buffers lengths: {[len(buf) for buf in loss_buffers]}")
 
         if self.log_per_step:
             per_step_info["loss"] = torch.stack(
