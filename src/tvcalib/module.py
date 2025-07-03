@@ -1,5 +1,7 @@
 from functools import partial
-from typing import Tuple
+from typing import Tuple, Optional, List
+import csv
+from pathlib import Path
 
 import torch
 from tqdm.auto import tqdm
@@ -159,7 +161,7 @@ class TVCalibModule(torch.nn.Module):
         }
         return distances_dict, cam
 
-    def self_optim_batch(self, x, *args, **kwargs):
+    def self_optim_batch(self, x, log_dir: Optional[Path] = None, frame_ids: Optional[List[str]] = None, *args, **kwargs):
 
         scheduler = self.Scheduler(self.optim)  # re-initialize lr scheduler for every batch
         if self.lens_distortion_active:
@@ -186,6 +188,15 @@ class TVCalibModule(torch.nn.Module):
         per_sample_loss["mask_circles"] = keypoint_masks["loss_ndc_circles"]
 
         per_step_info = {"loss": [], "lr": []}
+        
+        # Initialize loss buffers for each frame if logging is enabled
+        loss_buffers = []
+        if log_dir is not None and frame_ids is not None:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            loss_buffers = [[] for _ in frame_ids]
+        else:
+            loss_buffers = []
+
         # with torch.autograd.detect_anomaly():
         with tqdm(range(self.optim_steps), **self.tqdm_kwqargs) as pbar:
             for step in pbar:
@@ -232,6 +243,16 @@ class TVCalibModule(torch.nn.Module):
                 loss_total_dist = losses["loss_ndc_lines"] + losses["loss_ndc_circles"]
                 loss_total = loss_total_dist
 
+                # Buffer loss value for logging
+                if log_dir is not None and frame_ids is not None:
+                    # Get per-sample losses for logging
+                    per_sample_total_loss = per_sample_loss["loss_ndc_lines"] + per_sample_loss["loss_ndc_circles"]
+                    
+                    for i, frame_id in enumerate(frame_ids):
+                        if i < len(per_sample_total_loss):
+                            loss_value = per_sample_total_loss[i].detach().cpu().item()
+                            loss_buffers[i].append((step, loss_value))
+
                 if self.log_per_step:
                     per_step_info["lr"].append(scheduler.get_last_lr())
                     per_step_info["loss"].append(distances_reduced)  # log per sample loss
@@ -253,6 +274,18 @@ class TVCalibModule(torch.nn.Module):
             torch.stack([per_sample_loss[key_dist] for key_dist in distances_dict.keys()], dim=0),
             dim=0,
         )
+
+        # Write loss data to CSV file if logging is enabled
+        if log_dir is not None and frame_ids is not None and any(loss_buffers):
+            # Write all buffered data at once
+            for i, frame_id in enumerate(frame_ids):
+                csv_path = log_dir / f"{frame_id}_loss.csv"
+                with open(csv_path, 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['step', 'loss'])
+                    writer.writerows(loss_buffers[i])
+        else:
+            print(f"DEBUG: Not writing CSV files. log_dir={log_dir}, frame_ids={frame_ids}, any(loss_buffers)={any(loss_buffers) if loss_buffers else False}")
 
         if self.log_per_step:
             per_step_info["loss"] = torch.stack(
