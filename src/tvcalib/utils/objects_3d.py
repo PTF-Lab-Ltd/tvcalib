@@ -1502,11 +1502,12 @@ class SoccerPitchLineCircleSegments(Abstract3dModel):
         sampling_factor_circles=0.8,
     ) -> None:
 
+        self.helper_filed = None
         if not (
             isinstance(base_field, SoccerPitchSNCircleCentralSplit)
             or isinstance(base_field, SoccerPitchSN)
         ):
-            raise NotImplementedError
+            self.helper_filed = SoccerPitchSNCircleCentralSplit(105.0, 68.0)
 
         self.sampling_factor_lines = sampling_factor_lines
         self.sampling_factor_circles = sampling_factor_circles
@@ -1552,7 +1553,7 @@ class SoccerPitchLineCircleSegments(Abstract3dModel):
 
         self.line_segments = torch.stack(self.line_segments, dim=-1).transpose(1, 2).to(device)
         self.line_palette = [
-            self._field_sncalib.palette[self.line_segments_names[i]]
+            (0, 255, 255)# self._field_sncalib.palette[self.line_segments_names[i]]
             for i in range(len(self.line_segments_names))
         ]
 
@@ -1570,20 +1571,33 @@ class SoccerPitchLineCircleSegments(Abstract3dModel):
                 "Circle right",
             ]
         else:
-            raise NotImplementedError
+            self.circle_segments_names = [
+                "Circle central left",
+                "Circle central right",
+                "Circle left",
+                "Circle right",
+            ]
 
         self.circle_segments = self._sample_points_from_circle_segments(
             m=N_cstar
         )  # (3, num_circles, num_points_per_circle)
-
-        self.circle_palette = [
-            self._field_sncalib.palette[self.circle_segments_names[i]]
-            for i in range(len(self.circle_segments_names))
-        ]
-
+       
+        if self.helper_filed is None:
+            self.circle_palette = [
+                self._field_sncalib.palette[self.circle_segments_names[i]]
+                for i in range(len(self.circle_segments_names))
+            ]
+        else:
+            self.circle_palette = [
+                self.helper_filed.palette[self.circle_segments_names[i]]
+                for i in range(len(self.circle_segments_names))
+            ]
+            
     def _sample_points_from_circle_segments(self, m: int):
-
-        sampled_points = self._field_sncalib.sample_field_points(dist=1.0, dist_circles=0.05)
+        if self.helper_filed is None:
+            sampled_points = self._field_sncalib.sample_field_points(dist=1.0, dist_circles=0.05)
+        else:
+            sampled_points = self.helper_filed.sample_field_points(dist=1.0, dist_circles=0.05)
         for key in self.circle_segments_names:
             assert len(sampled_points[key]) >= m
         return (
